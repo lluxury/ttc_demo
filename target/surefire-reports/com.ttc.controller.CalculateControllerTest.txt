@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.ttc.controller.CalculateControllerTest
+-------------------------------------------------------------------------------
+Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.512 s -- in com.ttc.controller.CalculateControllerTest
