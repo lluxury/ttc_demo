@@ -1,0 +1,18 @@
+server:
+  port: 8080   # 网关统一入口
+
+spring:
+  cloud:
+    gateway:
+      routes:
+        # 路由1：业务服务 (business) - 算分
+        - id: business-service
+          uri: http://localhost:8082   # 注意：business 要改端口为 8082
+          predicates:
+            - Path=/api/score/**
+
+        # 路由2：管理服务 (management) - 模板
+        - id: management-service
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/management/**, /api/template/**
