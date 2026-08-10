@@ -1,0 +1,5 @@
+com\ttc\common\ResultTest.class
+com\ttc\initializer\DataInitializerTest.class
+com\ttc\api\dto\DtoTest.class
+com\ttc\management\service\TemplateServiceTest.class
+com\ttc\controller\TemplateControllerTest.class

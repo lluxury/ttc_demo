@@ -1,0 +1,11 @@
+com\ttc\api\dto\TemplateCreateReq.class
+com\ttc\management\repository\KpiTemplateRepository.class
+com\ttc\management\service\TemplateService.class
+com\ttc\TtcManagementApplication.class
+com\ttc\api\dto\CalcResult.class
+com\ttc\common\Result.class
+com\ttc\management\entity\KpiTemplateEntity.class
+com\ttc\config\CacheConfig.class
+com\ttc\controller\TemplateController.class
+com\ttc\api\dto\CalcReq.class
+com\ttc\initializer\DataInitializer.class

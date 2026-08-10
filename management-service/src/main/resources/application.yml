@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:spm_db;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+  # ★★★ 替换 Redis 缓存为 Caffeine ★★★
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=1000,expireAfterWrite=600s  # 最大1000条，过期10分钟
+
+server:
+  port: 8081
+
+logging:
+  level:
+    com.ttc: debug
