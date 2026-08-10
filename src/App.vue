@@ -61,7 +61,8 @@ const handleCreateTemplate = async () => {
   templateLoading.value = true
   templateResult.value = null
   try {
-    const res = await axios.post('/api/management/template', {
+    const res = await axios.post('/api/template', {
+    // const res = await axios.post('/api/management/template', {    
       name: templateName.value || '默认模板',
       baseScore: 100,
       weights: {
