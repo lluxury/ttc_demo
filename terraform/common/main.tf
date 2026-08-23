@@ -1,71 +1,47 @@
 # ============================================
-# 共享资源：ACR + GitHub OIDC 配置
+# 资源组（共享）
 # ============================================
+resource "azurerm_resource_group" "main" {
+  name     = "rg-${var.project_name}-${var.environment}"
+  location = var.location
+}
 
-# AWS 对应:
-#   - aws_ecr_repository
-#   - aws_iam_openid_connect_provider
-#   - aws_iam_role.github_actions
+# ============================================
+# Log Analytics Workspace（供 VM 和 AKS 共用）
+# ============================================
+resource "azurerm_log_analytics_workspace" "main" {
+  name                = "log-${var.project_name}-${var.environment}"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  daily_quota_gb      = 1
+}
 
-# 随机后缀（确保资源名称唯一）
-resource "random_string" "suffix" {
+# ============================================
+# ACR（镜像仓库）
+# ============================================
+resource "random_string" "acr_suffix" {
   length  = 6
   special = false
   upper   = false
 }
 
-# Azure Container Registry（模拟 AWS ECR）
 resource "azurerm_container_registry" "main" {
-  name                = "acr${var.project_name}${random_string.suffix.result}"
-  resource_group_name = var.resource_group_name
-  location            = var.location
+  name                = "acr${var.project_name}${var.environment}${random_string.acr_suffix.result}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
   sku                 = "Standard"
   admin_enabled       = false
 
-  # AWS 对应: aws_ecr_repository.main
+  # 保留策略：保留最近 30 个镜像
+  retention_policy {
+    days    = 30
+    enabled = true
+  }
 }
 
-# GitHub OIDC 配置（Azure AD 应用注册）
-# AWS 对应: aws_iam_openid_connect_provider.github
-resource "azuread_application" "github_oidc" {
-  display_name     = "github-actions-${var.project_name}"
-  sign_in_audience = "AzureADMyOrg"
-}
-
-resource "azuread_service_principal" "github_oidc" {
-  client_id = azuread_application.github_oidc.client_id
-}
-
-# OIDC 联合凭证 - 信任 GitHub
-# AWS 对应: aws_iam_role.github_actions（信任策略中的 Condition）
-resource "azuread_application_federated_identity_credential" "github_main" {
-  application_id = azuread_application.github_oidc.id
-  display_name   = "github-main"
-  audiences      = ["api://AzureADTokenExchange"]
-  issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_organization}/${var.github_repository}:ref:refs/heads/main"
-}
-
-resource "azuread_application_federated_identity_credential" "github_develop" {
-  application_id = azuread_application.github_oidc.id
-  display_name   = "github-develop"
-  audiences      = ["api://AzureADTokenExchange"]
-  issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_organization}/${var.github_repository}:ref:refs/heads/develop"
-}
-
-resource "azuread_application_federated_identity_credential" "github_hotfix" {
-  application_id = azuread_application.github_oidc.id
-  display_name   = "github-hotfix"
-  audiences      = ["api://AzureADTokenExchange"]
-  issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_organization}/${var.github_repository}:ref:refs/heads/hotfix/*"
-}
-
-# AWS 对应: aws_iam_role.github_actions 的权限策略
-# 使用 Contributor 角色模拟 AWS 权限
-resource "azurerm_role_assignment" "github_oidc" {
-  scope                = var.resource_group_scope
-  role_definition_name = "Contributor"
-  principal_id         = azuread_service_principal.github_oidc.object_id
-}
+# ============================================
+# 注意：AD 应用注册已手动创建，此处不管理
+# 参考: GitHub Secrets 中的 AZURE_CLIENT_ID
+# ============================================

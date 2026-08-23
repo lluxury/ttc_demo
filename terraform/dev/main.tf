@@ -1,35 +1,35 @@
 # ============================================
-# Dev 环境：Azure VM + Docker Compose
-# 模拟 AWS EC2 + Docker Compose
+# Dev 环境：VM + Docker Compose
 # ============================================
 
-# 资源组（如果不在 common 中创建）
-resource "azurerm_resource_group" "dev" {
-  name     = "rg-${var.project_name}-dev"
-  location = var.location
+locals {
+  vm_name = "vm-${var.project_name}-${var.environment}"
 }
 
-# 虚拟网络和子网
+# ============================================
+# 网络资源
+# ============================================
 resource "azurerm_virtual_network" "dev" {
-  name                = "vnet-${var.project_name}-dev"
+  name                = "vnet-${var.project_name}-${var.environment}"
   address_space       = ["10.0.0.0/16"]
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
 }
 
 resource "azurerm_subnet" "dev" {
-  name                 = "subnet-dev"
-  resource_group_name  = azurerm_resource_group.dev.name
+  name                 = "subnet-${var.project_name}-${var.environment}"
+  resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.dev.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
+# ============================================
 # 安全组
-# AWS 对应: aws_security_group.dev
+# ============================================
 resource "azurerm_network_security_group" "dev" {
-  name                = "nsg-${var.project_name}-dev"
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
+  name                = "nsg-${var.project_name}-${var.environment}"
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
 
   security_rule {
     name                       = "SSH"
@@ -66,26 +66,26 @@ resource "azurerm_network_security_group" "dev" {
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
-
-  # AWS 对应: 安全组入站规则
 }
 
+# ============================================
 # 公网 IP
+# ============================================
 resource "azurerm_public_ip" "dev" {
-  name                = "pip-${var.project_name}-dev"
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
+  name                = "pip-${var.project_name}-${var.environment}"
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
   allocation_method   = "Static"
   sku                 = "Standard"
-
-  # AWS 对应: aws_eip.dev
 }
 
+# ============================================
 # 网络接口
+# ============================================
 resource "azurerm_network_interface" "dev" {
-  name                = "nic-${var.project_name}-dev"
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
+  name                = "nic-${var.project_name}-${var.environment}"
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
 
   ip_configuration {
     name                          = "ipconfig1"
@@ -95,30 +95,50 @@ resource "azurerm_network_interface" "dev" {
   }
 }
 
-# 将安全组绑定到网卡
 resource "azurerm_network_interface_security_group_association" "dev" {
   network_interface_id      = azurerm_network_interface.dev.id
   network_security_group_id = azurerm_network_security_group.dev.id
 }
 
-# Azure VM（模拟 AWS EC2）
-# AWS 对应: aws_instance.dev
+# ============================================
+# 用户托管身份（VM 拉取 ACR 镜像用）
+# ============================================
+resource "azurerm_user_assigned_identity" "dev_vm" {
+  name                = "id-${var.project_name}-${var.environment}-vm"
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+}
+
+# 授予 ACR Pull 权限
+resource "azurerm_role_assignment" "dev_vm_acr_pull" {
+  scope                = "/subscriptions/${data.azurerm_subscription.current.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.ContainerRegistry/registries/${var.acr_name}"
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.dev_vm.principal_id
+}
+
+data "azurerm_subscription" "current" {}
+
+# ============================================
+# VM
+# ============================================
 resource "azurerm_linux_virtual_machine" "dev" {
-  name                = "vm-${var.project_name}-dev"
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
-  size                = "Standard_B2s"  # 对应 t3.medium
+  name                = local.vm_name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+  size                = var.vm_size
 
   network_interface_ids = [azurerm_network_interface.dev.id]
 
-  admin_username = "azureuser"
-  admin_password = var.vm_password
+  admin_username = var.vm_admin_username
+  admin_password = var.vm_admin_password
+  disable_password_authentication = false
 
   custom_data = base64encode(templatefile("${path.module}/user_data.sh.tpl", {
-    project_name    = var.project_name
-    acr_name        = var.acr_name
-    acr_login_server = var.acr_login_server
-    location        = var.location
+    project_name                = var.project_name
+    acr_login_server            = var.acr_login_server
+    acr_name                    = var.acr_name
+    log_analytics_workspace_id  = var.log_analytics_workspace_id
+    location                    = var.resource_group_location
   }))
 
   os_disk {
@@ -134,35 +154,17 @@ resource "azurerm_linux_virtual_machine" "dev" {
     version   = "latest"
   }
 
-  # AWS 对应: 用户数据（User Data）
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.dev_vm.id]
+  }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.project_name
+  }
+
+  depends_on = [
+    azurerm_role_assignment.dev_vm_acr_pull
+  ]
 }
-
-# VM 托管身份（模拟 AWS IAM Role）
-# AWS 对应: aws_iam_role.ec2
-resource "azurerm_user_assigned_identity" "dev_vm" {
-  name                = "id-${var.project_name}-dev-vm"
-  location            = azurerm_resource_group.dev.location
-  resource_group_name = azurerm_resource_group.dev.name
-}
-
-# 授予 ACR 拉取权限
-resource "azurerm_role_assignment" "dev_vm_acr_pull" {
-  scope                = azurerm_container_registry.main.id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.dev_vm.principal_id
-}
-
-# 将托管身份分配给 VM
-resource "azurerm_virtual_machine_extension" "dev_identity" {
-  name                 = "msi-extension"
-  virtual_machine_id   = azurerm_linux_virtual_machine.dev.id
-  publisher            = "Microsoft.ManagedIdentity"
-  type                 = "ManagedIdentityExtensionForLinux"
-  type_handler_version = "1.0"
-
-  settings = jsonencode({
-    "port" : 50342
-  })
-}
-
-# AWS 对应: aws_eip.dev（已在公网 IP 中实现）

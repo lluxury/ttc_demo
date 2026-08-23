@@ -4,22 +4,54 @@ variable "location" {
   default     = "eastasia"
 }
 
-variable "environment" {
-  description = "环境标识（dev/stg/prod）"
-  default     = "dev"
-}
-
 variable "project_name" {
   description = "项目名称"
   default     = "myapp"
 }
 
-variable "github_organization" {
-  description = "GitHub 组织名"
-  default     = "your-org"
+variable "environment" {
+  description = "环境标识"
+  default     = "dev"
 }
 
-variable "github_repository" {
-  description = "GitHub 仓库名"
-  default     = "your-repo"
+variable "vm_size" {
+  description = "VM 实例规格"
+  default     = "Standard_B2s"
+}
+
+variable "vm_admin_username" {
+  description = "VM 管理员用户名"
+  default     = "azureuser"
+}
+
+variable "vm_admin_password" {
+  description = "VM 管理员密码"
+  type        = string
+  sensitive   = true
+}
+
+# 从 common 传入
+variable "resource_group_name" {
+  description = "资源组名称"
+  type        = string
+}
+
+variable "resource_group_location" {
+  description = "资源组位置"
+  type        = string
+}
+
+variable "acr_login_server" {
+  description = "ACR 登录服务器"
+  type        = string
+}
+
+variable "acr_name" {
+  description = "ACR 名称"
+  type        = string
+}
+
+variable "log_analytics_workspace_id" {
+  description = "Log Analytics Workspace ID"
+  type        = string
 }

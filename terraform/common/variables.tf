@@ -14,12 +14,25 @@ variable "project_name" {
   default     = "myapp"
 }
 
-variable "github_organization" {
-  description = "GitHub 组织名"
-  default     = "your-org"
+variable "environment" {
+  description = "环境标识"
+  default     = "dev"
 }
 
-variable "github_repository" {
-  description = "GitHub 仓库名"
-  default     = "your-repo"
+variable "azure_ad_client_id" {
+  description = "手动在 Portal 创建的 Azure AD 应用注册的客户端 ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "azure_ad_tenant_id" {
+  description = "Azure AD 租户 ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "azure_subscription_id" {
+  description = "Azure 订阅 ID"
+  type        = string
+  sensitive   = true
 }

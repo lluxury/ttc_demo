@@ -1,16 +1,39 @@
-# outputs.tf
-output "acr_login_server" {
-  value = azurerm_container_registry.acr.login_server
+output "resource_group_name" {
+  value = azurerm_resource_group.main.name
+}
+
+output "resource_group_id" {
+  value = azurerm_resource_group.main.id
+}
+
+output "location" {
+  value = azurerm_resource_group.main.location
+}
+
+output "log_analytics_workspace_id" {
+  value = azurerm_log_analytics_workspace.main.id
 }
 
 output "acr_name" {
-  value = azurerm_container_registry.acr.name
+  value = azurerm_container_registry.main.name
 }
 
-output "container_app_name" {
-  value = azurerm_container_app.main.name
+output "acr_login_server" {
+  value = azurerm_container_registry.main.login_server
 }
 
-output "resource_group_name" {
-  value = azurerm_resource_group.main.name
+output "acr_id" {
+  value = azurerm_container_registry.main.id
+}
+
+output "tenant_id" {
+  value = var.azure_ad_tenant_id
+}
+
+output "subscription_id" {
+  value = var.azure_subscription_id
+}
+
+output "client_id" {
+  value = var.azure_ad_client_id
 }
