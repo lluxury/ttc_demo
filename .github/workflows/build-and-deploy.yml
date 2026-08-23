@@ -1,0 +1,155 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '目标环境'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      image_tag:
+        description: '镜像 Tag（留空使用最新）'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ACR_NAME: ${{ secrets.ACR_NAME }}
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  PROJECT_NAME: myapp
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
+
+      - name: Login to Azure via OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and Push
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          else
+            IMAGE_TAG="${{ github.sha }}"
+          fi
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+          docker build -t ${{ env.ACR_LOGIN_SERVER }}/${{ env.PROJECT_NAME }}:$IMAGE_TAG .
+          docker push ${{ env.ACR_LOGIN_SERVER }}/${{ env.PROJECT_NAME }}:$IMAGE_TAG
+
+  # ============================================================
+  # Dev 部署：通过 VM Run Command 执行 /opt/deploy.sh
+  # ============================================================
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'develop') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    steps:
+      - name: Login to Azure via OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Dev VM
+        env:
+          VM_RG: ${{ secrets.DEV_VM_RG }}
+          VM_NAME: ${{ secrets.DEV_VM_NAME }}
+        run: |
+          az vm run-command invoke \
+            --resource-group $VM_RG \
+            --name $VM_NAME \
+            --command-id RunShellScript \
+            --scripts "/opt/deploy.sh ${{ env.ACR_LOGIN_SERVER }} ${{ env.PROJECT_NAME }} ${{ needs.build.outputs.image_tag }}"
+
+  # ============================================================
+  # UAT 部署：更新 GitOps 仓库 values.yaml
+  # ============================================================
+  deploy-uat:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'uat')
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: 你的组织/gitops-config
+          token: ${{ secrets.GIT_PAT }}
+          path: gitops-config
+
+      - name: Update UAT values
+        run: |
+          cd gitops-config
+          sed -i "s|tag: .*|tag: ${{ needs.build.outputs.image_tag }}|g" uat/values.yaml
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add uat/values.yaml
+          git commit -m "UAT: update image tag to ${{ needs.build.outputs.image_tag }}"
+          git push
+
+  # ============================================================
+  # Prod 部署：更新 GitOps 仓库 values.yaml（需审批）
+  # ============================================================
+  deploy-prod:
+    needs: [build, deploy-uat]
+    runs-on: ubuntu-latest
+    environment: production
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: 你的组织/gitops-config
+          token: ${{ secrets.GIT_PAT }}
+          path: gitops-config
+
+      - name: Update Prod values
+        run: |
+          cd gitops-config
+          sed -i "s|tag: .*|tag: ${{ needs.build.outputs.image_tag }}|g" prod/values.yaml
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add prod/values.yaml
+          git commit -m "Prod: update image tag to ${{ needs.build.outputs.image_tag }}"
+          git push
