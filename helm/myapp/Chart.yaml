@@ -1,0 +1,6 @@
+apiVersion: v2
+name: myapp
+description: MyApp Helm Chart for AKS deployment
+# AWS 对应: EKS 部署使用相同 Chart
+version: 0.1.0
+appVersion: "1.0.0"

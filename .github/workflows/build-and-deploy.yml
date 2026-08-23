@@ -1,31 +1,51 @@
-name: Build and Deploy to Azure Container Apps
+name: Build and Deploy
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+    branches: [ main, develop, 'hotfix/*' ]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: '目标环境'
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      image_tag:
+        description: '镜像 Tag（留空使用最新）'
+        required: false
+        type: string
 
+# AWS 对应: 相同的 workflow 结构，仅认证和部署命令不同
 permissions:
   id-token: write
   contents: read
 
 env:
-  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ACR_NAME: ${{ secrets.ACR_NAME }}
-  RESOURCE_GROUP: rg-myapp-dev
-  CONTAINER_APP_NAME: app-myapp-dev
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  PROJECT_NAME: myapp
   IMAGE_TAG: ${{ github.sha }}
 
+# AWS 对应:
+#   env:
+#     AWS_REGION: ${{ secrets.AWS_REGION }}
+#     AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+#     ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+#     ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -37,6 +57,7 @@ jobs:
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
+      # Azure OIDC 认证
       - name: Login to Azure via OIDC
         uses: azure/login@v1
         with:
@@ -44,19 +65,123 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      # AWS 对应:
+      # - name: Configure AWS credentials via OIDC
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
       - name: Login to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
 
-      - name: Build and Push Docker image
+      - name: Build and Push
+        id: set-tag
+        env:
+          ACR_REGISTRY: ${{ env.ACR_LOGIN_SERVER }}
         run: |
-          docker build -t ${{ env.ACR_NAME }}.azurecr.io/myapp:${{ env.IMAGE_TAG }} .
-          docker tag ${{ env.ACR_NAME }}.azurecr.io/myapp:${{ env.IMAGE_TAG }} ${{ env.ACR_NAME }}.azurecr.io/myapp:latest
-          docker push ${{ env.ACR_NAME }}.azurecr.io/myapp:${{ env.IMAGE_TAG }}
-          docker push ${{ env.ACR_NAME }}.azurecr.io/myapp:latest
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          else
+            IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          fi
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Deploy to Container App
+          docker build -t $ACR_REGISTRY/${{ env.PROJECT_NAME }}:$IMAGE_TAG .
+          docker push $ACR_REGISTRY/${{ env.PROJECT_NAME }}:$IMAGE_TAG
+
+      # AWS 对应:
+      # - name: Login to ECR
+      #   uses: aws-actions/amazon-ecr-login@v2
+      #   # 然后 docker build + docker push
+
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'develop') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    steps:
+      - name: Login to Azure via OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # AWS 对应:
+      # - name: Configure AWS credentials via OIDC
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Dev VM
+        env:
+          VM_RESOURCE_GROUP: ${{ secrets.DEV_VM_RG }}
+          VM_NAME: ${{ secrets.DEV_VM_NAME }}
         run: |
-          az containerapp update \
-            --name ${{ env.CONTAINER_APP_NAME }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.ACR_NAME }}.azurecr.io/myapp:${{ env.IMAGE_TAG }}
+          az vm run-command invoke \
+            --resource-group $VM_RESOURCE_GROUP \
+            --name $VM_NAME \
+            --command-id RunShellScript \
+            --scripts "/opt/deploy.sh ${{ env.ACR_LOGIN_SERVER }} ${{ env.PROJECT_NAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.LOG_WORKSPACE_ID }} ${{ secrets.CONNECTION_STRING }}"
+
+      # AWS 对应:
+      # aws ssm send-command \
+      #   --instance-ids $INSTANCE_ID \
+      #   --document-name "AWS-RunShellScript" \
+      #   --parameters commands="/opt/deploy.sh $ECR_REGISTRY $ECR_REPOSITORY $IMAGE_TAG $AWS_REGION $PROJECT_NAME"
+
+  update-gitops-uat:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'uat')
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: your-org/gitops-config
+          token: ${{ secrets.GIT_PAT }}
+          path: gitops-config
+
+      - name: Update UAT values
+        run: |
+          cd gitops-config
+          sed -i "s|tag: .*|tag: ${{ needs.build.outputs.image_tag }}|g" uat/values.yaml
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Update UAT image to ${{ needs.build.outputs.image_tag }}"
+          git push
+
+      # AWS 对应: 完全相同，GitOps 仓库更新逻辑不变
+
+  update-gitops-prod:
+    needs: [build, update-gitops-uat]
+    runs-on: ubuntu-latest
+    environment: production
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod')
+    steps:
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: your-org/gitops-config
+          token: ${{ secrets.GIT_PAT }}
+          path: gitops-config
+
+      - name: Update Prod values
+        run: |
+          cd gitops-config
+          sed -i "s|tag: .*|tag: ${{ needs.build.outputs.image_tag }}|g" prod/values.yaml
+          git config user.name "github-actions"
+          git config.user.email "actions@github.com"
+          git add .
+          git commit -m "Update Prod image to ${{ needs.build.outputs.image_tag }}"
+          git push
+
+      # AWS 对应: 完全相同，GitOps 仓库更新逻辑不变

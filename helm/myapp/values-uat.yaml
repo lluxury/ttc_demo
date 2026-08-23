@@ -1,0 +1,13 @@
+replicaCount: 2
+
+image:
+  tag: latest
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
+ingress:
+  hosts:
+    - host: myapp-uat.azure.com

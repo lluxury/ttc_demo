@@ -1,0 +1,21 @@
+replicaCount: 3
+
+image:
+  tag: latest
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+
+ingress:
+  hosts:
+    - host: myapp-prod.azure.com
