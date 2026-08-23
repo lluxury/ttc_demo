@@ -19,5 +19,5 @@ provider "azurerm" {
     }
   }
   # 如果权限受限，跳过 provider 注册可以加快速度
-  skip_provider_registration = true
+  resource_provider_registrations = "none"
 }

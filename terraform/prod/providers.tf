@@ -9,6 +9,14 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -18,6 +26,5 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = false
     }
   }
-  # 如果权限受限，跳过 provider 注册可以加快速度
-  skip_provider_registration = true
+  resource_provider_registrations = "none"
 }

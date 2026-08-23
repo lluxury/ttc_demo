@@ -1,12 +1,7 @@
-# variables.tf
+# 正确的 variables.tf 内容（只保留一份）
 variable "location" {
   description = "Azure 区域"
   default     = "eastasia"
-}
-
-variable "environment" {
-  description = "环境标识（dev/stg/prod）"
-  default     = "dev"
 }
 
 variable "project_name" {
@@ -14,6 +9,7 @@ variable "project_name" {
   default     = "myapp"
 }
 
+# 👇 只保留这一个 environment 定义
 variable "environment" {
   description = "环境标识"
   default     = "dev"

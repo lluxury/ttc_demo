@@ -4,11 +4,6 @@ variable "location" {
   default     = "eastasia"
 }
 
-variable "environment" {
-  description = "环境标识（dev/stg/prod）"
-  default     = "dev"
-}
-
 variable "project_name" {
   description = "项目名称"
   default     = "myapp"
@@ -24,19 +19,9 @@ variable "node_count" {
   default     = 3
 }
 
-variable "min_nodes" {
-  description = "AKS 最小节点数"
-  default     = 2
-}
-
-variable "max_nodes" {
-  description = "AKS 最大节点数"
-  default     = 6
-}
-
 variable "node_vm_size" {
   description = "AKS 节点 VM 规格"
-  default     = "Standard_D2s_v3"  # 生产环境用更大规格
+  default     = "Standard_D2s_v3"
 }
 
 variable "kubernetes_version" {

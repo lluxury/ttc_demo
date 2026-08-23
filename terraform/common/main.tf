@@ -31,14 +31,9 @@ resource "azurerm_container_registry" "main" {
   name                = "acr${var.project_name}${var.environment}${random_string.acr_suffix.result}"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  sku                 = "Standard"
+  sku                 = "Premium"                     # 保留策略需要 Premium SKU
   admin_enabled       = false
-
-  # 保留策略：保留最近 30 个镜像
-  retention_policy {
-    days    = 30
-    enabled = true
-  }
+  retention_policy_in_days = 30                      # 自动清理未标记镜像
 }
 
 # ============================================

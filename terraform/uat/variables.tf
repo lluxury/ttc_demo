@@ -16,22 +16,12 @@ variable "environment" {
 
 variable "node_count" {
   description = "AKS 节点数"
-  default     = 2
-}
-
-variable "min_nodes" {
-  description = "AKS 最小节点数"
   default     = 1
-}
-
-variable "max_nodes" {
-  description = "AKS 最大节点数"
-  default     = 5
 }
 
 variable "node_vm_size" {
   description = "AKS 节点 VM 规格"
-  default     = "Standard_B2s"
+  default     = "Standard_B2s_v2"
 }
 
 variable "kubernetes_version" {

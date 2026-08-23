@@ -32,7 +32,7 @@ cat > /opt/app/docker-compose.yml << 'EOF'
 version: '3.8'
 services:
   app:
-    image: ${ACR_LOGIN_SERVER}/${PROJECT_NAME}:${IMAGE_TAG}
+    image: $${acr_login_server}/$${project_name}:$${IMAGE_TAG}
     ports:
       - "80:8080"
     restart: always
@@ -41,7 +41,7 @@ services:
     logging:
       driver: "azure-monitor"
       options:
-        azure-monitor.workspace-id: ${LOG_WORKSPACE_ID}
+        azure-monitor.workspace-id: $${log_analytics_workspace_id}
 EOF
 
 # ============================================
@@ -58,14 +58,14 @@ LOG_WORKSPACE_ID=$4
 
 # 登录 ACR（使用托管身份）
 az login --identity --allow-no-subscriptions
-az acr login --name ${ACR_LOGIN_SERVER%%\.*}
+az acr login --name $${ACR_LOGIN_SERVER%%\.*}
 
 # 拉取新镜像
-docker pull ${ACR_LOGIN_SERVER}/${PROJECT_NAME}:${IMAGE_TAG}
+docker pull $${ACR_LOGIN_SERVER}/$${PROJECT_NAME}:$${IMAGE_TAG}
 
 # 更新 docker-compose.yml
 cd /opt/app
-sed -i "s|image: .*|image: ${ACR_LOGIN_SERVER}/${PROJECT_NAME}:${IMAGE_TAG}|g" docker-compose.yml
+sed -i "s|image: .*|image: $${ACR_LOGIN_SERVER}/$${PROJECT_NAME}:$${IMAGE_TAG}|g" docker-compose.yml
 
 # 重新部署
 docker-compose down || true
@@ -74,7 +74,7 @@ docker-compose up -d
 # 清理旧镜像
 docker image prune -f
 
-echo "Deployed ${PROJECT_NAME}:${IMAGE_TAG} to Dev VM"
+echo "Deployed $${PROJECT_NAME}:$${IMAGE_TAG} to Dev VM"
 EOF
 
 chmod +x /opt/deploy.sh

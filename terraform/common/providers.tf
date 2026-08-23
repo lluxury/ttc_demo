@@ -1,4 +1,3 @@
-# providers.tf
 terraform {
   required_providers {
     azurerm = {
@@ -18,6 +17,6 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = false
     }
   }
-  # 如果权限受限，跳过 provider 注册可以加快速度
-  skip_provider_registration = true
+  # 修复：skip_provider_registration 已弃用，改用 resource_provider_registrations
+  resource_provider_registrations = "none"
 }

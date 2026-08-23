@@ -26,14 +26,21 @@ output "acr_id" {
   value = azurerm_container_registry.main.id
 }
 
+# ============================================
+# 以下为敏感值，标记 sensitive = true
+# 修复：Output refers to sensitive values 错误
+# ============================================
 output "tenant_id" {
-  value = var.azure_ad_tenant_id
+  value     = var.azure_ad_tenant_id
+  sensitive = true
 }
 
 output "subscription_id" {
-  value = var.azure_subscription_id
+  value     = var.azure_subscription_id
+  sensitive = true
 }
 
 output "client_id" {
-  value = var.azure_ad_client_id
+  value     = var.azure_ad_client_id
+  sensitive = true
 }
