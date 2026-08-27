@@ -1,0 +1,5 @@
+*                       @org/core-team
+/src/             @org/backend
+/src/test        @org/frontend
+/helm/                 @org/devops
+/.github/workflows/     @org/platform-security
