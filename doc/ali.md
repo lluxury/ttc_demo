@@ -336,6 +336,244 @@ if __name__ == "__main__":
 服务概览页：
 产生费用的云产品数量（如：共涉及 14 款云产品）。
 固定费用（包年包月） vs 弹性费用（按量付费）比例。
+
+
+# 0913
+面对**“机器数量多、文档模糊、单机混布（一台机器跑多个应用/容器/定时任务）”**的存量环境，人工一台台登录排查极易遗漏且效率低下。
+
+推荐采用**“流量入口反推 + 自动化批量探针 + 依赖逆向测绘”**的三步排查法，可以在几天内把几十上百台混布机器摸得清清楚楚。
+
+---
+
+### 第一步：自顶向下，先抓“流量入口”（纲举目张）
+
+混布系统里，直接看机器容易眼花，但**用户流量的入口只有那么几个**。顺着流量走，能迅速理清核心业务跑在哪。
+
+1. **查负载均衡（ALB / SLB / CLB / Nginx）**：
+   * 导出所有云账号下的负载均衡监听规则。
+   * 查看**转发规则（Target Groups / 后端服务器组）**：域名/路径 -> 转发到了哪台机器（IP）的哪个端口（Port）。
+   * *产出*：直接锁定 70% 以上承接业务流量的主力机器与应用端口。
+2. **查 DNS 解析与 CDN**：
+   * 收集公司所有域名，看解析记录指向了哪些公网 IP、EIP 或 SLB 地址。
+
+---
+
+### 第二步：利用云助手/Ansible 执行“自动化探针脚本”（解决机器多）
+
+**千万不要手动 SSH 登录上百台机器！**
+利用各家云平台的**免密运维通道**（AWS Systems Manager / 阿里云云助手 Cloud Assistant / Azure Run Command）或 Ansible，**批量下发同一套只读侦测脚本**。
+
+#### 💡 万能的主机资产与混布排查脚本（Shell）
+将以下脚本批量分发执行，输出为一个 JSON 或文本日志：
+
+```bash
+#!/bin/bash
+echo "========== 1. 主机基本信息 =========="
+hostname; hostname -I; uname -a
+
+echo "========== 2. 正在监听的端口与对应进程 (核心排查) =========="
+# 找出所有监听端口、PID及进程名
+ss -tulpn | grep LISTEN || netstat -tulnp | grep LISTEN
+
+echo "========== 3. 容器排查 (Docker/K8s) =========="
+if command -v docker &> /dev/null; then
+    # 打印运行中的容器名、镜像、端口映射、挂载目录
+    docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}"
+fi
+
+echo "========== 4. 常驻与自启服务 (Systemd/Supervisor) =========="
+systemctl list-units --type=service --state=running | head -n 30
+if command -v supervisorctl &> /dev/null; then
+    supervisorctl status
+fi
+
+echo "========== 5. 易被遗忘的定时任务 (Crontab) =========="
+crontab -l 2>/dev/null
+ls -la /etc/cron* 2>/dev/null
+
+echo "========== 6. 关键进程启动工作目录 (精准定位代码在哪) =========="
+# 抓取 Java / Node / Python / Go 等核心进程的工作目录
+for pid in $(pgrep -d " " -f "java|node|python|gunicorn|dotnet"); do
+    echo "PID: $pid | Dir: $(ls -l /proc/$pid/cwd 2>/dev/null | awk '{print $NF}') | Cmd: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c 1-200)"
+done
+
+echo "========== 7. 对外依赖连接 (识别连了哪些数据库/Redis/MQ) =========="
+# 查看本机正在连外部哪些 IP 和端口（ESTABLISHED 状态）
+ss -ant | awk '{print $5}' | grep -vE '127.0.0.1|0.0.0.0|\*|:' | sort | uniq -c | sort -nr | head -n 20
+```
+
+---
+
+### 第三步：逆向解构“单机混布”的四大关键
+
+探针脚本跑完后，针对单台混布机器，按以下 4 个维度进行“应用剥离”：
+
+```text
+混布机器 (IP: 10.0.1.50)
+ ├── 端口 8080 ──> PID 1234 (Java) ──> 工作目录 /app/order-service ──> 连 RDS A
+ ├── 端口 3000 ──> PID 5678 (Node) ──> 工作目录 /app/frontend-admin ──> 静态前端
+ ├── 容器 redis-cluster ──> 端口 6379 ──> 本地混布的缓存中间件
+ └── Crontab ──> 每天 02:00 跑 /scripts/sync_data.py (隐形数据同步任务)
+```
+
+1. **定位代码路径与工作目录**：
+   * 通过 `pwdx <PID>` 或 `ls -l /proc/<PID>/cwd`，立刻知道这个进程的代码/jar包/二进制文件放在哪个目录下（例如 `/opt/web/payment`）。
+2. **提取环境变量与配置文件**：
+   * 去对应的工作目录下看 `application.properties`、`.env`、`config.yaml` 或直接查看进程环境变量：
+     `cat /proc/<PID>/environ | tr '\0' '\n'`
+   * 这里能直接拿到该应用连接的 **数据库 (RDS) 地址、Redis 地址、第三方 API Key**。
+3. **识别日志路径与健康检查**：
+   * 找该目录下的 `logs/` 或查看打开的文件句柄 `lsof -p <PID>`，确认日志打在哪里（后续接监控和收集用）。
+4. **揪出隐形定时任务（极易漏掉）**：
+   * 很多混布机器上跑着十几年前遗留下来的 Python/Shell 跑批脚本，务必检查 `crontab -l` 和 `/etc/crontab`。
+
+---
+
+### 第四步：输出《全局应用-主机混布拓扑总表》
+
+把排查结果汇总为统一的盘点矩阵（CMDB 底表），这是后续迁移 CI/CD、重构或上容器的基准依据：
+
+| 所属云/账号 | 主机私网 IP | 承载应用/服务名 | 运行方式 (进程/Docker) | 监听端口 | 代码/工作目录 | 依赖的外部资源 (DB/MQ) | 入口流量 (ALB/域名) | 备注 (是否可独立拆分) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| AWS-Prod (111) | `10.0.1.10` | `order-service` | Java (PID 1021) | 8080 | `/app/order` | RDS-MySQL (`10.0.5.20:3306`) | `api.xxx.com/order` | 混布了老旧同步脚本 |
+| AWS-Prod (111) | `10.0.1.10` | `data-sync-job` | Cron (Python) | 无 | `/opt/scripts` | 同上 | 内部定时触发 | 建议后续迁移至云函数 |
+| 阿里云-Prod (222) | `172.16.0.5` | `pay-gateway` | Docker 容器 | 8443:8443 | `/data/docker/...` | Redis (`r-xxx.redis.rds.aliyuncs.com`) | `pay.xxx.com` | 独立容器，易迁移 |
+
+---
+
+### 五、 核心避坑指南（排查混布常见盲区）
+
+1. **警惕“僵尸进程”与“未下线老版本”**：
+   * 经常会发现某台机器上起了 2 个 Java 进程，一个叫 `app-v1.jar`，一个叫 `app-v2.jar`。
+   * **核验方法**：看端口谁在监听（`ss -tulpn`），看进程启动时间（`ps -eo pid,lstart,cmd | grep java`），看连接数，没有流量的就是死进程。
+2. **不要漏掉本地起的文件存储/中间件**：
+   * 很多老系统混布时，会在机器本地直接 `apt/yum install redis` 或 `nginx`，甚至把业务文件写在 `/data/upload` 本地目录。迁移流水线前必须把这些本地依赖记录下来。
+3. **分批梳理，优先攻克核心业务**：
+   * 不要试图一天理清 100 个；先利用第一步的 ALB 流量列表，挑出 **Top 20 核心业务应用** 进行深入剥离，跑顺一套模板，剩下的边缘服务套用模板就会极快。
+  
+
+
+
+
+
+
+
+要对多云环境下的大量混布机器进行**全量导出**并**排查访问量（评估是否退役下线）**，可以通过“云监控指标 + 负载均衡流量 + 主机网络底噪”三层数据来进行精准判定。
+
+---
+
+### 一、 准备工作：需要哪些资源与权限？
+
+你不需要申请机器的 Root 写权限，只需准备**只读权限**和**命令行工具**即可：
+
+1. **权限准备（每个云账号配置 ReadOnly）**：
+   * **AWS**：`ReadOnlyAccess` 或至少包含 `EC2ReadOnlyAccess`、`ElasticLoadBalancingReadOnly`、`CloudWatchReadOnlyAccess`。
+   * **阿里云**：`ReadOnlyAccess` 或 `AliyunECSReadOnlyAccess`、`AliyunSLBReadOnlyAccess`、`AliyunCloudMonitorReadOnlyAccess`。
+   * **Azure**：订阅级别的 `Reader`（读取者）角色。
+2. **工具环境**：
+   * 本地或跳板机安装 `aws-cli`、`aliyun-cli`、`az-cli`。
+   * Python 3 + `pandas`（用于一键将各云拉下来的 JSON 数据合并为统一 Excel）。
+
+---
+
+### 二、 如何一键导出资产与负载均衡列表？
+
+使用各云官方 CLI，可直接批量导出机器列表和 LB 转发规则为 CSV/表格：
+
+#### 1. AWS 资产与 ALB 导出
+```bash
+# 导出所有 EC2 实例 (ID, 私网IP, 公网IP, 实例名, 状态)
+aws ec2 describe-instances \
+  --query "Reservations[*].Instances[*].[InstanceId,PrivateIpAddress,PublicIpAddress,Tags[?Key=='Name'].Value|[0],State.Name]" \
+  --output table
+
+# 导出所有 ALB 目标组及其绑定的后端机器和端口 (核心混布入口)
+aws elbv2 describe-target-groups \
+  --query "TargetGroups[*].[TargetGroupArn,TargetGroupName,Port,Protocol,VpcId]" \
+  --output table
+```
+
+#### 2. 阿里云资产与 SLB 导出
+```bash
+# 导出所有 ECS 实例
+aliyun ecs DescribeInstances \
+  --output cols=InstanceId,InstanceName,PrivateIpAddresses.IpAddress[0],PublicIpAddresses.IpAddress[0],Status \
+  --rows Instances.Instance[]
+
+# 导出所有 SLB 负载均衡及其后端服务器
+aliyun slb DescribeLoadBalancers \
+  --output cols=LoadBalancerId,LoadBalancerName,Address,NetworkType,AddressType \
+  --rows LoadBalancers.LoadBalancer[]
+```
+
+#### 3. Azure 资产导出
+```bash
+# 导出所有 VM 虚拟机
+az vm list -d --query "[].[name,resourceGroup,privateIps,publicIps,powerState.displayStatus]" -o table
+```
+
+---
+
+### 三、 如何查访问量？（用于退役/下线评估的核心方法）
+
+评估一个应用或机器**“是否可以退役”**，切忌只看当前时刻。必须拉取 **过去 30 ~ 90 天** 的数据（防止踩到季度/月度定时跑批业务）。
+
+#### 方法 1：从负载均衡（ALB/SLB）查请求量（最直观）
+如果应用挂在 LB 后面，通过云监控直接拉取 **Request Count (请求总数) / QPS**：
+
+* **AWS ALB**：进入 CloudWatch -> Metrics -> `ApplicationELB` -> 查 `RequestCount`（按目标组 Target Group 统计）。
+  * *判定*：过去 30 天 `Sum(RequestCount)` 为 0 或极低（仅有健康检查流量），即可判定无外部业务流量。
+* **阿里云 SLB**：进入 云监控 -> SLB 监控 -> 查 `QPS` 和 `ActiveConnection`（活跃连接数）。
+  * *判定*：过去 30 天 QPS 平直且无抖动。
+* **Azure App Gateway**：查看 Azure Monitor -> `Total Requests`。
+
+#### 方法 2：无 LB 的机器，查主机网络 I/O（识别是否只有“心跳底噪”）
+对于混布了内部服务、未挂公网 LB 的机器，直接看云监控的 **NetworkIn / NetworkOut（网络吞吐量）**：
+
+* **指标观察法**：
+  * **僵尸/废弃机器特征**：网络出入流量常年低于 **1~5 KB/s**（这条平直的线仅仅是云安全中心 Agent、NTP 时钟同步、系统日志的心跳底噪）。
+  * **活跃机器特征**：每天有明显的峰谷波形，或网络流量达到 MB/s 级别。
+
+#### 方法 3：主机层查活跃连接与 Access Log（精准到具体混布端口）
+在一台混布了多个端口的机器上，看具体哪个端口没人用：
+
+```bash
+# 1. 查看当前各端口的外部连接数 (如果端口常年只有 0 个连接，基本处于闲置)
+ss -ant | grep -E ':(8080|8081|3000)' | grep ESTAB | wc -l
+
+# 2. 检查 Nginx / 应用 Access Log 的最后修改时间与写入量
+ls -lh /var/log/nginx/*access.log
+tail -n 100 /path/to/app/logs/access.log
+```
+
+---
+
+### 四、 应用退役评估矩阵（决策树）
+
+根据收集到的指标，将应用/机器划分为四类：
+
+| 评估分类 | 指标特征 | 处置策略 |
+| :--- | :--- | :--- |
+| 🔴 **明确废弃 (高优先级退役)** | 过去 30~60 天 RequestCount = 0，Network I/O 仅有心跳底噪，无数据库连接 | **直接进入退役下线流程** |
+| 🟡 **疑似死进程 (端口级退役)** | 机器上有其他流量，但某混布端口（如 8081）几个月无访问日志 | **下线该独立进程，释放单机内存** |
+| 🔵 **周期性/低频业务** | 平时无流量，但在每月 1 号或每周日晚有明显的 CPU/网络脉冲 | **保留，属于跑批/月结任务，切勿误杀** |
+| 🟢 **主力活跃业务** | 持续产生稳定 QPS 和网络流量 | **纳入新 CI/CD 纳管范围** |
+
+---
+
+### 五、 安全退役“四步下线法”（绝对不背锅的 SOP）
+
+对于评估出来“没有访问量、建议退役”的应用和机器，**严禁直接 Terminate / 销毁**，按照以下步骤操作可保证 100% 安全：
+
+```text
+[1. 移出流量] ──> [2. 关停进程/停机] ──> [3. 快照冷备份] ──> [4. 延期 14 天销毁]
+ (解绑 DNS/LB)      (观察 7 天是否报错)      (保留系统盘 Snapshot)     (彻底释放降本)
+```
+
+1. **第 1 步（解绑流量入口）**：先从 DNS 解析或 ALB/SLB Target Group 中剔除（或禁用监听端口），观察 **3~7 天** 看是否有其他业务团队报障。
+2. **第 2 步（停止实例/进程 Stop）**：7 天无异常后，执行 `Stop-Instance`（停机但保留磁盘），停机状态不再收取计算费用。
+3. **第 3 步（制作快照冷备份 Snapshot）**：打一份全盘系统快照（AMI / Snapshot），归档留存。
+4. **第 4 步（彻底释放 Terminate）**：停机放置 **14~30 天** 后，若全公司仍无人认领，直接释放机器，完成彻底退役与账单降本。
 核心资源台账（对齐业务）：
 实例ID ➔ 公网/内网IP ➔ 对应环境 (生产/测试/预发) ➔ 负责团队/业务模块。
 优化与缩容建议（快速产出业务价值）：
